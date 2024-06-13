@@ -1,4 +1,5 @@
 use std::cmp::Ordering::Equal;
+use std::net::IpAddr;
 use std::process::exit;
 use base64::encode;
 use clap::{Arg, Command, value_parser};
@@ -82,6 +83,7 @@ async fn crawler(url: &str, be_ip: &str) -> Vec<JobInfo> {
 #[tokio::main]
 async fn main() {
     let mut num_top = 1000;
+    let mut fe_port = 8030;
     let mut fe_hosts_input = Vec::new();
     let matches = Command::new("doris_resource_topN")
         .version("1.0")
@@ -90,6 +92,14 @@ async fn main() {
         .arg(Arg::new("num")
             .long("num")
             .help("Enter an integer number to process.")
+            .takes_value(true)
+            .required(false)  // 可以不是必需的，根据你的需求调整
+            .value_name("INT")
+            .value_parser(value_parser!(i32))
+        )
+        .arg(Arg::new("fe_port")
+            .long("fe_port")
+            .help("Enter fe http port")
             .takes_value(true)
             .required(false)  // 可以不是必需的，根据你的需求调整
             .value_name("INT")
@@ -106,7 +116,7 @@ async fn main() {
 
 
     if let Some(values) = matches.get_one::<String>("fe_host") {
-        if values.len()<1{
+        if values.len() < 1 {
             println!("Need at least one fe host");
             exit(1);
         }
@@ -122,6 +132,14 @@ async fn main() {
         exit(1);
     }
 
+    if let Some(port) = matches.get_one::<i32>("fe_port") {
+        println!("Getting fe http port is {} ", port);
+        fe_port = port.clone();
+    } else {
+        println!("No fe http port provided. Use --help for more information.");
+        exit(1);
+    }
+
     println!("Please enter your password:");
     let password = read_password().unwrap();
 
@@ -134,7 +152,7 @@ async fn main() {
         None => exit(0)
     }
 
-    let url = format!("http://{}:8030/api/show_proc/?path=//backends", fe_ip);
+    let url = format!("http://{}:{}/api/show_proc/?path=//backends", fe_ip, fe_port);
     let auth_header = encode(format!("{}:{}", "root", &password).as_bytes());
     let client = Client::new();
     let response = client.get(url)
@@ -145,8 +163,15 @@ async fn main() {
 
     let res: Res = response.expect("has error").json::<Res>().await.unwrap();
     let mut job_info_all: Vec<JobInfo> = Vec::new();
+    let mut col_tmp = 2;
     for be in res.data {
-        let be_ip = be.get(2).unwrap().clone();
+        for (index, item) in be.iter().enumerate() {
+            if item.parse::<IpAddr>().is_ok() {
+                col_tmp = index;
+                break
+            }
+        }
+        let be_ip = be.get(col_tmp).unwrap().clone();
         let be_url = format!("http://{}:8040/mem_tracker", be_ip);
         let mut data_map = crawler(&be_url, &be_ip).await;
         job_info_all.append(&mut data_map);
