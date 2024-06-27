@@ -1,4 +1,5 @@
 use std::cmp::Ordering::Equal;
+use std::collections::HashMap;
 use std::net::IpAddr;
 use std::process::exit;
 use base64::encode;
@@ -163,12 +164,13 @@ async fn main() {
 
     let res: Res = response.expect("has error").json::<Res>().await.unwrap();
     let mut job_info_all: Vec<JobInfo> = Vec::new();
+
     let mut col_tmp = 2;
     for be in res.data {
         for (index, item) in be.iter().enumerate() {
             if item.parse::<IpAddr>().is_ok() {
                 col_tmp = index;
-                break
+                break;
             }
         }
         let be_ip = be.get(col_tmp).unwrap().clone();
@@ -176,21 +178,36 @@ async fn main() {
         let mut data_map = crawler(&be_url, &be_ip).await;
         job_info_all.append(&mut data_map);
     }
+    // 进行聚合
+    let mut aggregation: HashMap<String, JobInfo> = HashMap::new();
+    for job in job_info_all {
+        aggregation.entry(job.job_label.clone()).and_modify(|e| {
+            e.current_consumption_bytes += job.current_consumption_bytes;
+            e.peak_consumption_bytes += job.peak_consumption_bytes;
+            e.be_ip = format!("{},{}", e.be_ip, job.be_ip);
+        }).or_insert(job);
+    }
 
-    job_info_all.sort_by(|a, b| b.current_consumption_bytes.partial_cmp(&a.current_consumption_bytes).unwrap_or(Equal));
+    let mut results: Vec<_> = aggregation.into_iter().map(|(_, v)| v).collect();
+    results.sort_by(|a, b| b.current_consumption_bytes.partial_cmp(&a.current_consumption_bytes).unwrap_or(Equal));
 
     let mut table = Table::new();
     table.add_row(row!["No","job_label", "current_consumption_gb","job_limit","job_type","peak_consumption_gb","be_ip"]);
 
     let mut num = 1;
-    for key in job_info_all.iter() {
+    for key in results.iter() {
+        let current_gb = key.current_consumption_bytes / 1024.0 / 1024.0 / 1024.0;
+        let formatted_current_gb = format!("{:.2}", current_gb);
+        let peak_gb = key.peak_consumption_bytes / 1024.0 / 1024.0 / 1024.0;
+        let formatted_peak_gb = format!("{:.2}", peak_gb);
+
         table.add_row(Row::new(vec![
             Cell::new((num).to_string().trim()),
             Cell::new(key.job_label.trim()),
-            Cell::new((key.current_consumption_bytes / 1024.0 / 1024.0 / 1024.0).to_string().trim()),
+            Cell::new(&formatted_current_gb),
             Cell::new(key.job_limit.to_string().trim()),
             Cell::new(key.job_type.to_string().trim()),
-            Cell::new((key.peak_consumption_bytes / 1024.0 / 1024.0 / 1024.0).to_string().trim()),
+            Cell::new(&formatted_peak_gb),
             Cell::new(&key.be_ip),
         ]));
         num = num + 1;
